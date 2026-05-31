@@ -16,8 +16,8 @@ import time
 from datetime import datetime
 import sys
 
-DATA_PATH="data/adc_data_2026-02-06_16-35-07_land_vib_80.npy"
-numFrames = 600
+DATA_PATH="data/adc_data_2026-05-26_15-17-06_phone_normal.npy"
+numFrames = 200
 numADCSamples = 256
 numTxAntennas = 3
 numRxAntennas = 4
@@ -99,7 +99,6 @@ def get_pcd(det_matrix):
                                                                     range_resolution, method='Bartlett')
     return xyzVec
 
-
 def iterative_range_bins_detection(rangeResult):
     rangeResult = np.transpose(np.stack([rangeResult[0::3], rangeResult[1::3], rangeResult[2::3]], axis=1),axes=(1,2,0,3))
     range_result_absnormal_split=[]
@@ -123,7 +122,6 @@ def iterative_range_bins_detection(rangeResult):
     max_range_index=np.argmax(range_abs_combined_nparray_collapsed)
     return max_range_index, peaks_min_intensity_threshold, rangeResult
 
-
 def get_phase(r,i):
     if r==0:
         if i>0:
@@ -142,7 +140,6 @@ def get_phase(r,i):
             phase=np.pi + np.arctan(i/r)
     return phase
 
-
 def phase_unwrapping(phase_len,phase_cur_frame):
     i=1
     new_signal_phase = phase_cur_frame
@@ -152,7 +149,6 @@ def phase_unwrapping(phase_len,phase_cur_frame):
         if new_signal_phase[k+1] - new_signal_phase[k] > 1.5*np.pi:
             new_signal_phase[k+1:] = new_signal_phase[k+1:] - 2*np.pi*np.ones(len(new_signal_phase[k+1:]))
     return np.array(new_signal_phase)
-
 
 def solve_equation(phase_cur_frame):
     phase_diff=[]
@@ -179,7 +175,6 @@ def solve_equation(phase_cur_frame):
             final_roots.append(root)
     return np.mean(final_roots)
 
-
 def get_velocity_antennawise(range_FFT_,peak):
     phase_per_antenna=[]
     vel_peak=[]
@@ -192,6 +187,16 @@ def get_velocity_antennawise(range_FFT_,peak):
     cur_vel=solve_equation(phase_cur_frame)
     return cur_vel
 
+def get_phase_antennawise(range_FFT_,peak):
+    phase_per_antenna=[]
+    vel_peak=[]
+    for k in range(0,numLoopsPerFrame):
+        r = range_FFT_[k][peak].real
+        i = range_FFT_[k][peak].imag
+        phase=get_phase(r,i)
+        phase_per_antenna.append(phase)
+    phase_cur_frame=phase_unwrapping(len(phase_per_antenna),phase_per_antenna)
+    return phase_cur_frame
 
 def get_velocity(rangeResult,range_peaks):
     vel_array_frame=[]
@@ -204,22 +209,18 @@ def get_velocity(rangeResult,range_peaks):
         vel_array_frame.append(vel_arr_all_ant)
     return vel_array_frame
 
-
 def dopplerFFT(rangeResult):  #
     windowedBins2D = rangeResult * np.reshape(np.hamming(numLoopsPerFrame), (1, 1, -1, 1))
     dopplerFFTResult = np.fft.fft(windowedBins2D, axis=2)
     dopplerFFTResult = np.fft.fftshift(dopplerFFTResult, axes=2)
     return dopplerFFTResult
 
-
 def speed_estimation_fn(range_bins, rangeResult):
     vel_array_frame = np.array(get_velocity(rangeResult,range_bins)).flatten()
     return vel_array_frame
     
 
-
 if __name__ == "__main__":
-    # dca = init_dca()
     plt.ion()
     fig = None
     i = 0 
@@ -227,38 +228,20 @@ if __name__ == "__main__":
     overlapped_range_bins = []
 
     loaded_adc_data = np.load(DATA_PATH)
-    while i < 100:
-        # i+=1
+    while i < 100 and i < len(loaded_adc_data):
         current_frame = loaded_adc_data[i:i+1]
         adc_data = np.apply_along_axis(DCA1000.organize, 1, current_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
         radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
+        
+        # Calculate Range FFT
         rangefft_out = np.abs(radar_cube).sum(axis=(0,1))
-        det_matrix, aoa_input = dsp.doppler_processing(radar_cube, num_tx_antennas=3, clutter_removal_enabled=True, window_type_2d=Window.HAMMING)
-        det_matrix_vis = np.fft.fftshift(det_matrix, axes=1)
-        max_range_index, range_bins, rangeResult = iterative_range_bins_detection(radar_cube)
-        if i < 5:
-            overlapped_range_bins.append(range_bins)
-            prev_range_bins = range_bins
-        else:
-            last_frame_idx = len(overlapped_range_bins)
-            curr_ranges = set()
-            for prev_range_bin in prev_range_bins:
-                for cur_range_bin in range_bins:
-                    if abs(prev_range_bin - cur_range_bin) <= 5:
-                        #if within +/- 3, then keep the range bins 
-                        curr_ranges.add(cur_range_bin)
-            prev_range_bins = range_bins
-            overlapped_range_bins.append(np.array(list(curr_ranges)))
-            range_bins = overlapped_range_bins[-1]
-        print(f"range_bins: {range_bins}, prev_range_bins: {prev_range_bins}, overlapped_range_bins: {overlapped_range_bins}")
-        vel_array_frame = speed_estimation_fn(range_bins, rangeResult)
-        print("vel_array_frame", vel_array_frame.shape)
+        # max_range_index, range_bins, rangeResult = iterative_range_bins_detection(radar_cube)
+        # target_bin = range_bins[0] if len(range_bins) > 0 else 0
+        # unwrapped_phase = get_phase_antennawise(rangeResult[0][0], target_bin)
 
         if fig is None:
-            fig = plt.figure(figsize=(18, 10))
-            ax1 = fig.add_subplot(1, 3, 1)
-            ax2 = fig.add_subplot(1, 3, 2)
-            ax3 = fig.add_subplot(1, 3, 3)
+            fig = plt.figure(figsize=(10, 6))
+            ax1 = fig.add_subplot(1, 1, 1) 
 
             ax_stop = fig.add_axes([0.75, 0.92, 0.1, 0.05])
             ax_start = fig.add_axes([0.87, 0.92, 0.1, 0.05])
@@ -267,19 +250,15 @@ if __name__ == "__main__":
             btn_stop.on_clicked(stop_plot)
             btn_start.on_clicked(start_plot)
 
-        for ax in [ax1, ax2, ax3]:
-            ax.cla()
+        ax1.cla()
 
-        ax1.plot(rangefft_out)
-        ax1.set_title("RangeFFT")
+        # --- Range FFT Plotting ---
+        ax1.plot(rangefft_out, color='blue')
+        ax1.set_title(f"1D Range Profile (FFT) | Frame: {i+1}")
+        ax1.set_xlabel("Range Bins")
+        ax1.set_ylabel("Amplitude")
+        ax1.grid(True)
 
-        sns.heatmap(det_matrix_vis / det_matrix_vis.max(), ax=ax2, cbar=False, cmap='viridis')
-        ax2.set_title("Range-doppler Heatmap")
-        ax3.axis('off')
-        message = f"Iteration {i+1}/100\nEstimated Speed: {vel_array_frame.mean():.2f}"
-        ax3.text(0.5, 0.5, message, ha='center', va='center', fontsize=14, fontweight='bold')
-
-        plt.tight_layout()
         plt.pause(0.1)
 
         i += 1  
