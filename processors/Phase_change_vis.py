@@ -223,6 +223,34 @@ def get_averaged_phase(rangeResult, target_bin):
     
     return avg_phase
 
+
+def get_and_plot_phase_differences(rangeResult, target_bin, frame_no, save_dir="Simulations/Mobile_Vibration_Phase"):
+    avg_phase = get_averaged_phase(rangeResult, target_bin)
+    
+    phase_diff = np.insert(np.diff(avg_phase), 0, 0)
+    
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(phase_diff, color='red', marker='.')
+    
+    ax.axhline(0, color='black', linestyle='--', linewidth=1.5)
+
+    max_val = np.max(np.abs(phase_diff))
+    ax.set_ylim(-max_val * 1.1, max_val * 1.1)
+    
+    ax.set_title(f"Phase Difference - Range Bin: {target_bin}")
+    ax.set_xlabel("Chirp Index")
+    ax.set_ylabel("Phase Diff (Rad)")
+    ax.grid(True)
+    
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(f"Simulations/Mobile_phase_difference/frame{frame_no}_{target_bin}_phase_diff.png")
+    plt.close(fig)
+    
+    return phase_diff
+
+
 def save_averaged_phase_plots(rangeResult, selected_bins, frame_no):
     save_dir = "Simulations/Mobile_Vibration_Phase"
     os.makedirs(save_dir, exist_ok=True)
@@ -320,6 +348,51 @@ def save_phase_plots(range_result_antenna, selected_bins, frame_no):
     
     print(f"Saved {len(selected_bins)} plots to {os.path.abspath(save_dir)}")
 
+
+
+
+def compute_mvdr_azimuth(rangeResult, target_bin, angles_deg=None):
+    if angles_deg is None:
+        angles_deg = np.linspace(-60, 60, 121) # Scan from -60 to +60 degrees
+        
+    angles_rad = np.radians(angles_deg)
+    num_tx, num_rx, num_chirps, _ = rangeResult.shape
+    num_antennas = num_tx * num_rx  # 3 * 4 = 12 virtual antennas
+    
+    X = rangeResult[:, :, :, target_bin].reshape(num_antennas, num_chirps)
+    
+    # 2. Compute the Spatial Covariance Matrix R (12x12)
+    # R = (1/N) * X * X^H
+    R = np.dot(X, X.conj().T) / num_chirps
+    
+    # 3. Robust MVDR: Add Diagonal Loading to prevent signal cancellation
+    # This stabilizes the matrix inversion against noise or steering vector errors
+    diagonal_loading = 1e-3 * np.trace(R) * np.eye(num_antennas)
+    R_loaded = R + diagonal_loading
+    
+    # 4. Invert the Covariance Matrix
+    R_inv = np.linalg.inv(R_loaded)
+    
+    # 5. Compute the MVDR Spectrum across the angular grid
+    mvdr_spectrum = np.zeros(len(angles_deg))
+    
+    for idx, theta in enumerate(angles_rad):
+        # Generate the Steering Vector a(theta) for a 12-element linear array
+        # Phase shift between adjacent elements is pi * sin(theta) assuming d = lambda/2
+        m = np.arange(num_antennas)
+        a = np.exp(1j * np.pi * m * np.sin(theta))
+        
+        # MVDR Power Formula: 1 / (a^H * R^-1 * a)
+        denom = np.dot(a.conj().T, np.dot(R_inv, a))
+        mvdr_spectrum[idx] = 1.0 / np.abs(denom)
+        
+    # Convert power spectrum to dB scaling for classic radar visualization
+    mvdr_spectrum_dB = 10 * np.log10(mvdr_spectrum / np.max(mvdr_spectrum))
+    
+    return angles_deg, mvdr_spectrum_dB
+
+
+
 frame_index = 2
 
 if __name__ == "__main__":
@@ -330,6 +403,8 @@ if __name__ == "__main__":
     min_b = 0
     max_b = 20
     max_range_index, range_bins, rangeResult = iterative_range_bins_detection(radar_cube, min_bin=min_b, max_bin=max_b)
-    selected_bins = range_bins[:max_b-min_b]
+    selected_bins = range_bins[min_b : max_b + 1]
     print(f"Processing top {len(selected_bins)} Range Bins: {selected_bins}")
-    save_averaged_phase_plots(rangeResult, selected_bins, frame_index)
+    # save_averaged_phase_plots(rangeResult, selected_bins, frame_index)
+    for target_bin in [11,12,13,14,15,16,17,18]:
+        get_and_plot_phase_differences(rangeResult, target_bin, frame_index)
