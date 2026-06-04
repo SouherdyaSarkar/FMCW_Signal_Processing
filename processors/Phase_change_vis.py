@@ -15,8 +15,8 @@ from datetime import datetime
 import sys
 import math
 
-DATA_PATH="data/adc_data_2026-05-26_15-17-41_phone_vib.npy"
-numFrames = 200
+DATA_PATH="data/Mobile_data/adc_data_2026-06-03_16-05-58_pho_vib.npy"
+numFrames = 600
 numADCSamples = 256
 numTxAntennas = 3
 numRxAntennas = 4
@@ -223,7 +223,6 @@ def get_averaged_phase(rangeResult, target_bin):
     
     return avg_phase
 
-
 def get_and_plot_phase_differences(rangeResult, target_bin, frame_no, save_dir="Simulations/Mobile_Vibration_Phase"):
     avg_phase = get_averaged_phase(rangeResult, target_bin)
     
@@ -235,7 +234,7 @@ def get_and_plot_phase_differences(rangeResult, target_bin, frame_no, save_dir="
     ax.axhline(0, color='black', linestyle='--', linewidth=1.5)
 
     max_val = np.max(np.abs(phase_diff))
-    ax.set_ylim(-max_val * 1.1, max_val * 1.1)
+    ax.set_ylim(-0.5,0.5)
     
     ax.set_title(f"Phase Difference - Range Bin: {target_bin}")
     ax.set_xlabel("Chirp Index")
@@ -245,11 +244,10 @@ def get_and_plot_phase_differences(rangeResult, target_bin, frame_no, save_dir="
     import os
     os.makedirs(save_dir, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(f"Simulations/Mobile_phase_difference/frame{frame_no}_{target_bin}_phase_diff.png")
+    fig.savefig(f"Simulations/Phone_data_day02/Phone_vibration_phases/frame{frame_no}_{target_bin}_phase_diff.png")
     plt.close(fig)
     
     return phase_diff
-
 
 def save_averaged_phase_plots(rangeResult, selected_bins, frame_no):
     save_dir = "Simulations/Mobile_Vibration_Phase"
@@ -348,63 +346,58 @@ def save_phase_plots(range_result_antenna, selected_bins, frame_no):
     
     print(f"Saved {len(selected_bins)} plots to {os.path.abspath(save_dir)}")
 
-
-
-
-def compute_mvdr_azimuth(rangeResult, target_bin, angles_deg=None):
-    if angles_deg is None:
-        angles_deg = np.linspace(-60, 60, 121) # Scan from -60 to +60 degrees
-        
-    angles_rad = np.radians(angles_deg)
-    num_tx, num_rx, num_chirps, _ = rangeResult.shape
-    num_antennas = num_tx * num_rx  # 3 * 4 = 12 virtual antennas
+def plot_continuous_phase_diff(all_phase_diffs, target_bin, start_frame, num_frames, save_dir):
+    fig, ax = plt.subplots(figsize=(15, 4))
     
-    X = rangeResult[:, :, :, target_bin].reshape(num_antennas, num_chirps)
+    ax.plot(all_phase_diffs, color='red', marker='.', markersize=0.5, linestyle='-', linewidth=0.3, alpha=0.8)
     
-    # 2. Compute the Spatial Covariance Matrix R (12x12)
-    # R = (1/N) * X * X^H
-    R = np.dot(X, X.conj().T) / num_chirps
+    ax.axhline(0, color='black', linestyle='--', linewidth=1.2)
+    ax.set_title(f"Continuous Phase Difference - Range Bin: {target_bin}\n(Frames {start_frame} to {start_frame + num_frames})", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Cumulative Chirp Index (Time)")
+    ax.set_ylabel("Phase Diff (Rad)")
+    ax.grid(True, linestyle=':', alpha=0.7)
     
-    # 3. Robust MVDR: Add Diagonal Loading to prevent signal cancellation
-    # This stabilizes the matrix inversion against noise or steering vector errors
-    diagonal_loading = 1e-3 * np.trace(R) * np.eye(num_antennas)
-    R_loaded = R + diagonal_loading
+    fig.tight_layout()
     
-    # 4. Invert the Covariance Matrix
-    R_inv = np.linalg.inv(R_loaded)
-    
-    # 5. Compute the MVDR Spectrum across the angular grid
-    mvdr_spectrum = np.zeros(len(angles_deg))
-    
-    for idx, theta in enumerate(angles_rad):
-        # Generate the Steering Vector a(theta) for a 12-element linear array
-        # Phase shift between adjacent elements is pi * sin(theta) assuming d = lambda/2
-        m = np.arange(num_antennas)
-        a = np.exp(1j * np.pi * m * np.sin(theta))
-        
-        # MVDR Power Formula: 1 / (a^H * R^-1 * a)
-        denom = np.dot(a.conj().T, np.dot(R_inv, a))
-        mvdr_spectrum[idx] = 1.0 / np.abs(denom)
-        
-    # Convert power spectrum to dB scaling for classic radar visualization
-    mvdr_spectrum_dB = 10 * np.log10(mvdr_spectrum / np.max(mvdr_spectrum))
-    
-    return angles_deg, mvdr_spectrum_dB
-
-
-
-frame_index = 2
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"frames{start_frame}_to_{start_frame+num_frames}_bin{target_bin}_continuous.png")
+    fig.savefig(save_path, dpi=300)
+    plt.close(fig)
+    print(f"Saved continuous plot for bin {target_bin} at {save_path}")
 
 if __name__ == "__main__":
     loaded_adc_data = np.load(DATA_PATH)
-    current_frame = loaded_adc_data[frame_index-1:frame_index]
-    adc_data = np.apply_along_axis(DCA1000.organize, 1, current_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
-    radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
-    min_b = 0
-    max_b = 20
-    max_range_index, range_bins, rangeResult = iterative_range_bins_detection(radar_cube, min_bin=min_b, max_bin=max_b)
-    selected_bins = range_bins[min_b : max_b + 1]
-    print(f"Processing top {len(selected_bins)} Range Bins: {selected_bins}")
-    # save_averaged_phase_plots(rangeResult, selected_bins, frame_index)
-    for target_bin in [11,12,13,14,15,16,17,18]:
-        get_and_plot_phase_differences(rangeResult, target_bin, frame_index)
+    start_frame = 300
+    num_frames = 10  
+    target_bins = [10, 11, 12, 13, 14, 15, 16, 17, 18]
+    
+    accumulated_phase_diffs = {bin_idx: [] for bin_idx in target_bins}
+    
+    print(f"Processing frames {start_frame} to {start_frame + num_frames}...")
+    for f in range(start_frame, start_frame + num_frames + 1):
+        current_frame = loaded_adc_data[f-1 : f]
+        adc_data = np.apply_along_axis(DCA1000.organize, 1, current_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
+        radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
+        
+        min_b = 0
+        max_b = 20
+        _, range_bins, rangeResult = iterative_range_bins_detection(radar_cube, min_bin=min_b, max_bin=max_b)
+ 
+        for target_bin in target_bins:
+            avg_phase = get_averaged_phase(rangeResult, target_bin)
+            phase_diff = np.insert(np.diff(avg_phase), 0, 0)
+            accumulated_phase_diffs[target_bin].extend(phase_diff)
+
+    save_directory = "Simulations/Radar/Phone_data_day02/Phone_vibration_phases"
+    
+    for target_bin in target_bins:
+        all_diffs_array = np.array(accumulated_phase_diffs[target_bin])
+        plot_continuous_phase_diff(
+            all_phase_diffs=all_diffs_array, 
+            target_bin=target_bin, 
+            start_frame=start_frame, 
+            num_frames=num_frames,
+            save_dir=save_directory
+        )
+        
+    print("All multi-block plots generated successfully!")
