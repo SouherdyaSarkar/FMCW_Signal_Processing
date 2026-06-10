@@ -4,6 +4,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.abspath(os.path.join(current_dir, '..')))
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import seaborn as sns
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.widgets import Button
@@ -15,7 +16,7 @@ from datetime import datetime
 import sys
 import math
 
-DATA_PATH="data/Mobile_data/adc_data_2026-06-03_16-05-58_pho_vib.npy"
+DATA_PATH="data/Mobie_data_8_june/adc_data_2026-06-08_14-47-41_PHONE_VIB_42CM_NEW.npy"
 numFrames = 600
 numADCSamples = 256
 numTxAntennas = 3
@@ -116,7 +117,9 @@ def iterative_range_bins_detection(rangeResult, min_bin=10, max_bin=None):
     return max_range_index, peaks_min_intensity_threshold, rangeResult
 
 def get_phase(r,i):
-    if r==0:
+    if r==0 and i==0:
+        phase = 0.0
+    elif r==0:
         if i>0:
             phase=np.pi/2
         else :
@@ -234,7 +237,6 @@ def get_and_plot_phase_differences(rangeResult, target_bin, frame_no, save_dir="
     ax.axhline(0, color='black', linestyle='--', linewidth=1.5)
 
     max_val = np.max(np.abs(phase_diff))
-    ax.set_ylim(-0.5,0.5)
     
     ax.set_title(f"Phase Difference - Range Bin: {target_bin}")
     ax.set_xlabel("Chirp Index")
@@ -365,16 +367,80 @@ def plot_continuous_phase_diff(all_phase_diffs, target_bin, start_frame, num_fra
     plt.close(fig)
     print(f"Saved continuous plot for bin {target_bin} at {save_path}")
 
+def create_phase_diff_gif(loaded_adc_data, target_bin, start_frame, num_frames, save_dir):
+
+    print(f"\n[INFO] Extracting data for GIF (Bin: {target_bin}, Frames: {start_frame} to {start_frame+num_frames-1})...")
+    frames_data = []
+
+    for f in range(start_frame, start_frame + num_frames):
+        current_frame = loaded_adc_data[f-1 : f]
+        adc_data = np.apply_along_axis(DCA1000.organize, 1, current_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
+        radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
+        
+        _, _, formatted_rangeResult = iterative_range_bins_detection(radar_cube, min_bin=0, max_bin=20)
+        
+        avg_phase = get_averaged_phase(formatted_rangeResult, target_bin)
+        phase_diff = np.insert(np.diff(avg_phase), 0, 0)
+        frames_data.append(phase_diff)
+
+    print("[INFO] Compiling frames into GIF. This may take a moment...")
+    
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.set_xlim(0, numLoopsPerFrame)
+    ax.axhline(0, color='black', linestyle='--', linewidth=1.5)
+    ax.set_ylim(-1,1)
+    ax.set_xlabel("Chirp Index")
+    ax.set_ylabel("Phase Diff (Rad)")
+    ax.grid(True, linestyle=':', alpha=0.7)
+
+    line, = ax.plot([], [], color='red', marker='.', markersize=4, linestyle='-', linewidth=1)
+    title = ax.set_title("")
+
+    def init():
+        line.set_data([], [])
+        title.set_text("")
+        return line, title
+
+    def update(frame_idx):
+        y_data = frames_data[frame_idx]
+        x_data = np.arange(len(y_data))
+        line.set_data(x_data, y_data)
+        
+        actual_frame_num = start_frame + frame_idx
+        title.set_text(f"Phase Difference - Range Bin: {target_bin} | Frame: {actual_frame_num}")
+        return line, title
+
+    ani = animation.FuncAnimation(fig, update, frames=len(frames_data), init_func=init, blit=True)
+    
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"bin_{target_bin}_frames_{start_frame}_to_{start_frame+num_frames-1}.gif")
+    
+    ani.save(save_path, writer='pillow', fps=10)
+    plt.close(fig)
+    print(f"[SUCCESS] GIF saved to: {os.path.abspath(save_path)}")
+
 if __name__ == "__main__":
     loaded_adc_data = np.load(DATA_PATH)
-    start_frame = 300
-    num_frames = 10  
-    target_bins = [10, 11, 12, 13, 14, 15, 16, 17, 18]
+    start_frame = 100
+    num_frames = 1  
+    # target_bin_for_gif=12
     
+    #setting up accumulated phase diffs array
+    starter_adc_data = loaded_adc_data
+    starter_frame = starter_adc_data[49:50]
+    adc_data = np.apply_along_axis(DCA1000.organize, 1, starter_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
+    radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
+    
+    min_b = 0
+    max_b = 30
+    _, range_bins, rangeResult = iterative_range_bins_detection(radar_cube, min_bin=min_b, max_bin=max_b)
+    # print(range_bins)
+    target_bins=[i for i in range(range_bins[2]-7,range_bins[2]+7)]
     accumulated_phase_diffs = {bin_idx: [] for bin_idx in target_bins}
-    
-    print(f"Processing frames {start_frame} to {start_frame + num_frames}...")
-    for f in range(start_frame, start_frame + num_frames + 1):
+    print("Set up basic phase diff array")
+
+    print(f"Processing frames {start_frame} to {start_frame + num_frames - 1}...")
+    for f in range(start_frame, start_frame + num_frames ):
         current_frame = loaded_adc_data[f-1 : f]
         adc_data = np.apply_along_axis(DCA1000.organize, 1, current_frame, num_chirps=numChirpsPerFrame, num_rx=numRxAntennas, num_samples=numADCSamples)
         radar_cube = dsp.range_processing(adc_data[0], window_type_1d=Window.BLACKMAN)
@@ -382,14 +448,22 @@ if __name__ == "__main__":
         min_b = 0
         max_b = 20
         _, range_bins, rangeResult = iterative_range_bins_detection(radar_cube, min_bin=min_b, max_bin=max_b)
- 
+
         for target_bin in target_bins:
             avg_phase = get_averaged_phase(rangeResult, target_bin)
             phase_diff = np.insert(np.diff(avg_phase), 0, 0)
             accumulated_phase_diffs[target_bin].extend(phase_diff)
 
-    save_directory = "Simulations/Radar/Phone_data_day02/Phone_vibration_phases"
-    
+    save_directory = "Simulations/Radar/Phone_data_8_june/phases_vibration_42cm"
+
+    # # create_phase_diff_gif(
+    # #     loaded_adc_data=loaded_adc_data,
+    # #     target_bin=target_bin_for_gif,
+    # #     start_frame=start_frame,
+    # #     num_frames=num_frames,
+    # #     save_dir=save_directory
+    # # )
+
     for target_bin in target_bins:
         all_diffs_array = np.array(accumulated_phase_diffs[target_bin])
         plot_continuous_phase_diff(
